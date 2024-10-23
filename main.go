@@ -38,7 +38,9 @@ func input() {
 			os.Exit(0)
 		case "list":
 			list := GlobalStreamer.GetVideoListPath()
-			log.Println(strings.Join(list, "\n"))
+			log.Println("\nvideo list:\n", strings.Join(list, "\n"))
+		case "current":
+			log.Println("current video: ", GlobalStreamer.GetCurrentVideo())
 		default:
 			log.Println("unknown command")
 		}
@@ -73,10 +75,12 @@ func startWatcher() {
 			}
 			if event.Op&fsnotify.Create == fsnotify.Create {
 				if utils.IsSupportedVideo(event.Name) {
+					log.Println("new video added:", event.Name)
 					GlobalStreamer.Add(event.Name)
 				}
 			}
 			if event.Op&fsnotify.Remove == fsnotify.Remove {
+				log.Println("video removed:", event.Name)
 				GlobalStreamer.Remove(event.Name)
 			}
 		case err, ok := <-watcher.Errors:

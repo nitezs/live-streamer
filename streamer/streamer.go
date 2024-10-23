@@ -161,6 +161,10 @@ func (s *Streamer) start() {
 
 	<-s.ctx.Done()
 	log.Printf("stop stream: %s", videoPath)
+
+	if currentVideo == s.videoList[s.currentVideoIndex] {
+		s.Next()
+	}
 }
 
 func (s *Streamer) Stop() {
@@ -169,7 +173,6 @@ func (s *Streamer) Stop() {
 		go func() {
 			done <- s.cmd.Wait()
 		}()
-
 		s.cancel()
 		s.mu.Lock()
 		if s.cmd != nil && s.cmd.Process != nil {
