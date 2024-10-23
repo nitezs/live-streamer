@@ -18,7 +18,7 @@ func main() {
 	if !utils.HasFFMPEG() {
 		log.Fatal("ffmpeg not found")
 	}
-	GlobalStreamer = streamer.NewStreamer(config.GlobalConfig.PlayList)
+	GlobalStreamer = streamer.NewStreamer(config.GlobalConfig.VideoList)
 	go input()
 	go startWatcher()
 	GlobalStreamer.Stream()
@@ -54,7 +54,7 @@ func startWatcher() {
 	}
 	defer watcher.Close()
 
-	for _, item := range config.GlobalConfig.PlayList {
+	for _, item := range config.GlobalConfig.InputItems {
 		if item.ItemType == "dir" {
 			err = watcher.Add(item.Path)
 			if err != nil {

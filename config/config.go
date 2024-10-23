@@ -41,8 +41,8 @@ type PlayConfig struct {
 
 type Config struct {
 	Input      []any        `json:"input"`
-	inputItems []InputItem  `json:"-"` // contains video file or dir
-	PlayList   []InputItem  `json:"-"` // only contains video file
+	InputItems []InputItem  `json:"-"` // contains video file or dir
+	VideoList  []InputItem  `json:"-"` // only contains video file
 	Play       PlayConfig   `json:"play"`
 	Output     OutputConfig `json:"output"`
 }
@@ -52,18 +52,18 @@ var GlobalConfig Config
 func init() {
 	GlobalConfig = Config{}
 	err := readConfig("config.json")
-	for i, item := range GlobalConfig.inputItems {
+	for i, item := range GlobalConfig.InputItems {
 		if item.ItemType == "file" {
-			GlobalConfig.PlayList = append(GlobalConfig.PlayList, item)
+			GlobalConfig.VideoList = append(GlobalConfig.VideoList, item)
 		} else if item.ItemType == "dir" {
 			videos, err := getAllVideos(item.Path)
 			if err != nil {
 				log.Fatalf("input[%v] walk error: %v", i, err)
 			}
-			GlobalConfig.PlayList = append(GlobalConfig.PlayList, videos...)
+			GlobalConfig.VideoList = append(GlobalConfig.VideoList, videos...)
 		}
 	}
-	if len(GlobalConfig.PlayList) == 0 {
+	if len(GlobalConfig.VideoList) == 0 {
 		log.Fatal("No input video found")
 	}
 	if err != nil {
@@ -122,7 +122,7 @@ func validateInputConfig() error {
 					return fmt.Errorf("video_path[%v] is not supported", i)
 				}
 			}
-			GlobalConfig.inputItems = append(GlobalConfig.inputItems, inputItem)
+			GlobalConfig.InputItems = append(GlobalConfig.InputItems, inputItem)
 		}
 	}
 	return nil
