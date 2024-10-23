@@ -163,6 +163,7 @@ func (s *Streamer) start() {
 		log.Println("case <-s.ctx.Done")
 		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
+			s.cmd = nil
 		}
 	case err := <-waitCmd(s.cmd):
 		log.Println("case err := <-waitCmd(s.cmd)")
