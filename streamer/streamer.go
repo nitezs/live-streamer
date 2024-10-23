@@ -14,6 +14,18 @@ import (
 	"time"
 )
 
+const (
+	CONTROL_ADD = iota
+	CONTROL_REMOVE
+	CONTROL_NEXT
+	CONTROL_PREV
+)
+
+type streamerControl struct {
+	cmd  int
+	args []string
+}
+
 type Streamer struct {
 	videoList         []config.InputItem
 	currentVideoIndex int
@@ -21,6 +33,7 @@ type Streamer struct {
 	logFile           *os.File
 	ctx               context.Context
 	cancel            context.CancelFunc
+	control           chan streamerControl
 }
 
 func NewStreamer(videoList []config.InputItem) *Streamer {
@@ -39,14 +52,44 @@ func NewStreamer(videoList []config.InputItem) *Streamer {
 		cmd:               nil,
 		logFile:           logFile,
 		ctx:               nil,
+		control:           make(chan streamerControl),
 	}
 }
 
 func (s *Streamer) Add(videoPath string) {
-	s.videoList = append(s.videoList, config.InputItem{Path: videoPath})
+	s.control <- streamerControl{cmd: CONTROL_ADD, args: []string{videoPath}}
 }
 
 func (s *Streamer) Remove(videoPath string) {
+	s.control <- streamerControl{cmd: CONTROL_REMOVE, args: []string{videoPath}}
+}
+
+func (s *Streamer) Prev() {
+	s.control <- streamerControl{cmd: CONTROL_PREV}
+}
+
+func (s *Streamer) Next() {
+	s.control <- streamerControl{cmd: CONTROL_NEXT}
+}
+
+func (s *Streamer) handleControl(req streamerControl) {
+	switch req.cmd {
+	case CONTROL_ADD:
+		s.doAdd(req.args[0])
+	case CONTROL_REMOVE:
+		s.doRemove(req.args[0])
+	case CONTROL_NEXT:
+		s.doNext()
+	case CONTROL_PREV:
+		s.doPrev()
+	}
+}
+
+func (s *Streamer) doAdd(videoPath string) {
+	s.videoList = append(s.videoList, config.InputItem{Path: videoPath})
+}
+
+func (s *Streamer) doRemove(videoPath string) {
 	for i, item := range s.videoList {
 		if item.Path == videoPath {
 			s.videoList = append(s.videoList[:i], s.videoList[i+1:]...)
@@ -61,7 +104,7 @@ func (s *Streamer) Remove(videoPath string) {
 	}
 }
 
-func (s *Streamer) Prev() {
+func (s *Streamer) doPrev() {
 	s.currentVideoIndex--
 	if s.currentVideoIndex < 0 {
 		s.currentVideoIndex = len(s.videoList) - 1
@@ -69,7 +112,7 @@ func (s *Streamer) Prev() {
 	s.start()
 }
 
-func (s *Streamer) Next() {
+func (s *Streamer) doNext() {
 	s.currentVideoIndex++
 	if s.currentVideoIndex >= len(s.videoList) {
 		s.currentVideoIndex = 0
@@ -140,7 +183,10 @@ func (s *Streamer) start() {
 	videoPath := currentVideo.Path
 	log.Println("start stream: ", videoPath)
 
-	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
+	args := s.buildFFmpegArgs(currentVideo)
+	log.Printf("ffmpeg args: %v", args)
+
+	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", args...)
 
 	pipe, err := s.cmd.StderrPipe()
 	if err != nil {
@@ -159,6 +205,8 @@ func (s *Streamer) start() {
 	go s.log(reader, writer)
 
 	select {
+	case req := <-s.control:
+		s.handleControl(req)
 	case <-s.ctx.Done():
 		log.Println("case <-s.ctx.Done")
 		if s.cmd != nil && s.cmd.Process != nil {
@@ -170,7 +218,7 @@ func (s *Streamer) start() {
 		if err != nil {
 			log.Printf("ffmpeg exited with error: %v", err)
 		}
-		s.Next()
+		s.doNext()
 	}
 }
 
