@@ -39,12 +39,22 @@ type PlayConfig struct {
 	CustomArgs      string `json:"custom_args"`
 }
 
+type LogConfig struct {
+	PlayState bool `json:"play_state"`
+}
+
+type AuthConfig struct {
+	Key string `json:"key"`
+}
+
 type Config struct {
 	Input      []any        `json:"input"`
 	InputItems []InputItem  `json:"-"` // contains video file or dir
 	VideoList  []InputItem  `json:"-"` // only contains video file
 	Play       PlayConfig   `json:"play"`
 	Output     OutputConfig `json:"output"`
+	Log        LogConfig    `json:"log"`
+	Auth       AuthConfig   `json:"auth"`
 }
 
 var GlobalConfig Config
@@ -162,7 +172,7 @@ func validatePlayConfig() error {
 		GlobalConfig.Play.BufSize = "12000k"
 	}
 	if GlobalConfig.Play.Scale == "" {
-		GlobalConfig.Play.Scale = "1920:1080"
+		GlobalConfig.Play.Scale = "1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
 	}
 	if GlobalConfig.Play.FrameRate == 0 {
 		GlobalConfig.Play.FrameRate = 30

@@ -3,13 +3,12 @@ package streamer
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"live-streamer/config"
-	"log"
-	"os"
+	"live-streamer/logger"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,28 +18,92 @@ type Streamer struct {
 	videoList         []config.InputItem
 	currentVideoIndex int
 	cmd               *exec.Cmd
-	logFile           *os.File
 	ctx               context.Context
 	cancel            context.CancelFunc
 	mu                sync.Mutex
+	logger            logger.Logger
 }
 
-func NewStreamer(videoList []config.InputItem) *Streamer {
-	logDir := "logs"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		log.Printf("Error creating log directory: %v\n", err)
-	}
-	logPath := filepath.Join(logDir, fmt.Sprintf("ffmpeg_%s.log", time.Now().Format("2006-01-02_15-04-05")))
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("Error opening log file: %v\n", err)
-	}
-	return &Streamer{
+var GlobalStreamer *Streamer
+
+func NewStreamer(videoList []config.InputItem, logger logger.Logger) *Streamer {
+	GlobalStreamer = &Streamer{
 		videoList:         videoList,
 		currentVideoIndex: 0,
 		cmd:               nil,
-		logFile:           logFile,
 		ctx:               nil,
+		logger:            logger,
+	}
+	return GlobalStreamer
+}
+
+func (s *Streamer) Stream() {
+	for {
+		if len(s.videoList) == 0 {
+			time.Sleep(time.Second)
+			continue
+		}
+		s.start()
+	}
+}
+
+func (s *Streamer) start() {
+	s.Stop()
+
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+
+	currentVideo := s.videoList[s.currentVideoIndex]
+	videoPath := currentVideo.Path
+	s.logger.Println("start stream: ", videoPath)
+
+	s.mu.Lock()
+	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
+	s.mu.Unlock()
+
+	pipe, err := s.cmd.StderrPipe()
+	if err != nil {
+		s.logger.Printf("failed to get pipe: %v", err)
+		return
+	}
+
+	reader := bufio.NewReader(pipe)
+
+	if err := s.cmd.Start(); err != nil {
+		s.logger.Printf("starting ffmpeg error: %v\n", err)
+		return
+	}
+
+	go s.log(reader)
+
+	<-s.ctx.Done()
+	s.logger.Printf("stop stream: %s", videoPath)
+
+	// stream next video
+	s.currentVideoIndex++
+	if s.currentVideoIndex >= len(s.videoList) {
+		s.currentVideoIndex = 0
+	}
+}
+
+func (s *Streamer) Stop() {
+	if s.cancel != nil {
+		stopped := make(chan error)
+		go func() {
+			stopped <- s.cmd.Wait()
+		}()
+		s.cancel()
+		s.mu.Lock()
+		if s.cmd != nil && s.cmd.Process != nil {
+			select {
+			case <-stopped:
+				break
+			case <-time.After(3 * time.Second):
+				_ = s.cmd.Process.Kill()
+				break
+			}
+			s.cmd = nil
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -79,13 +142,29 @@ func (s *Streamer) Next() {
 	s.Stop()
 }
 
-func (s *Streamer) Stream() {
-	for {
-		if len(s.videoList) == 0 {
-			time.Sleep(time.Second)
-			continue
+func (s *Streamer) log(reader *bufio.Reader) {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+		if !config.GlobalConfig.Log.PlayState {
+			return
 		}
-		s.start()
+		buf := make([]byte, 1024)
+		for {
+			n, err := reader.Read(buf)
+			if n > 0 {
+				videoPath, _ := s.GetCurrentVideoPath()
+				buf = append([]byte(videoPath), buf...)
+				s.logger.Print(string(buf[:n]))
+			}
+			if err != nil {
+				if err != io.EOF {
+					s.logger.Printf("reading ffmpeg error: %v\n", err)
+				}
+				break
+			}
+		}
 	}
 }
 
@@ -125,75 +204,16 @@ func (s *Streamer) buildFFmpegArgs(videoItem config.InputItem) []string {
 
 	args = append(args, fmt.Sprintf("%s/%s", config.GlobalConfig.Output.RTMPServer, config.GlobalConfig.Output.StreamKey))
 
-	// log.Println("ffmpeg args: ", args)
+	// logger.GlobalLogger.Println("ffmpeg args: ", args)
 
 	return args
 }
 
-func (s *Streamer) start() {
-	s.Stop()
-
-	s.ctx, s.cancel = context.WithCancel(context.Background())
-
-	currentVideo := s.videoList[s.currentVideoIndex]
-	videoPath := currentVideo.Path
-	log.Println("start stream: ", videoPath)
-
-	s.mu.Lock()
-	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
-	s.mu.Unlock()
-
-	pipe, err := s.cmd.StderrPipe()
-	if err != nil {
-		log.Printf("failed to get pipe: %v", err)
-		return
+func (s *Streamer) GetCurrentVideoPath() (string, error) {
+	if len(s.videoList) == 0 {
+		return "", errors.New("no video streaming")
 	}
-
-	reader := bufio.NewReader(pipe)
-	writer := bufio.NewWriter(s.logFile)
-
-	if err := s.cmd.Start(); err != nil {
-		log.Printf("starting ffmpeg error: %v\n", err)
-		return
-	}
-
-	go s.log(reader, writer)
-
-	<-s.ctx.Done()
-	log.Printf("stop stream: %s", videoPath)
-
-	if currentVideo == s.videoList[s.currentVideoIndex] {
-		s.Next()
-	}
-}
-
-func (s *Streamer) Stop() {
-	if s.cancel != nil {
-		done := make(chan error)
-		go func() {
-			done <- s.cmd.Wait()
-		}()
-		s.cancel()
-		s.mu.Lock()
-		if s.cmd != nil && s.cmd.Process != nil {
-			select {
-			case <-done:
-				break
-			case <-time.After(3 * time.Second):
-				// log.Printf("ffmpeg process is still running, killing it...\n")
-				if !s.cmd.ProcessState.Exited() {
-					_ = s.cmd.Process.Kill()
-				}
-				break
-			}
-			s.cmd = nil
-		}
-		s.mu.Unlock()
-	}
-}
-
-func (s *Streamer) GetCurrentVideo() string {
-	return s.videoList[s.currentVideoIndex].Path
+	return s.videoList[s.currentVideoIndex].Path, nil
 }
 
 func (s *Streamer) GetVideoList() []config.InputItem {
@@ -213,41 +233,5 @@ func (s *Streamer) GetCurrentIndex() int {
 }
 
 func (s *Streamer) Close() {
-	if s.logFile != nil {
-		s.logFile.Close()
-		s.logFile = nil
-	}
 	s.Stop()
-}
-
-func (s *Streamer) log(reader *bufio.Reader, writer *bufio.Writer) {
-	defer func() {
-		if s.logFile != nil {
-			if err := s.logFile.Sync(); err != nil {
-				log.Printf("syncing log file error: %v\n", err)
-			}
-		}
-	}()
-	buf := make([]byte, 1024)
-	for {
-		n, err := reader.Read(buf)
-		if err != nil {
-			if err != io.EOF {
-				log.Printf("reading ffmpeg error: %v\n", err)
-			}
-			break
-		}
-		if n > 0 {
-			timestamp := time.Now().Format("2006-01-02 15:04:05")
-			logLine := fmt.Sprintf("[%s] %s", timestamp, string(buf[:n]))
-			if s.logFile != nil {
-				if _, err := writer.WriteString(logLine); err != nil {
-					log.Printf("writing to log file error: %v\n", err)
-				}
-				if err := writer.Flush(); err != nil {
-					log.Printf("flushing writer error: %v\n", err)
-				}
-			}
-		}
-	}
 }

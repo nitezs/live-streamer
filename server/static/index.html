@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Streamer</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      body,
+      html {
+        height: 100vh;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        background-color: #f0f2f5;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        overflow: hidden;
+      }
+
+      .container-fluid {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 15px;
+        height: 100%;
+        gap: 15px;
+        overflow: hidden;
+      }
+
+      .header {
+        flex: 0 0 auto;
+        background: linear-gradient(135deg, #6e8efb, #4a6cf7);
+        color: white;
+        padding: 15px 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      .header h2 {
+        margin: 0;
+        font-weight: 600;
+      }
+
+      #status {
+        flex: 0 0 auto;
+        background-color: white;
+        padding: 10px 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      }
+
+      #output-container {
+        flex: 1;
+        min-height: 100px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      #messages {
+        flex: 1;
+        height: auto !important;
+        resize: none;
+        border-radius: 8px;
+        padding: 15px;
+        font-family: "Consolas", monospace;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        background-color: #2b2b2b;
+        color: #e0e0e0;
+        border: none;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      #app-container {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        min-height: 200px;
+      }
+
+      #current-video {
+        flex: 0 0 60px;
+        background-color: white;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        display: flex;
+        align-items: center;
+      }
+
+      .bottom-section {
+        flex: 1;
+        display: flex;
+        gap: 15px;
+        min-height: 160px;
+        max-height: 300px;
+      }
+
+      #control-panel {
+        flex: 0 0 150px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 15px;
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      }
+
+      .btn {
+        border-radius: 6px;
+        font-weight: 500;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+        letter-spacing: 0.5px;
+        padding: 8px 15px;
+        transition: all 0.3s ease;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, #6e8efb, #4a6cf7);
+        border: none;
+      }
+
+      .btn-primary:hover {
+        background: linear-gradient(135deg, #5d7df9, #3959f5);
+        transform: translateY(-1px);
+      }
+
+      .btn-danger {
+        background: linear-gradient(135deg, #ff6b6b, #ee5253);
+        border: none;
+      }
+
+      .btn-danger:hover {
+        background: linear-gradient(135deg, #ff5252, #ed4444);
+        transform: translateY(-1px);
+      }
+
+      #video-list-container {
+        flex: 1;
+        background-color: white;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        display: flex;
+        flex-direction: column;
+      }
+
+      #video-list {
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 10px;
+        flex: 0 0 auto;
+      }
+
+      .list-group {
+        flex: 1;
+        overflow-y: auto;
+        padding-right: 5px;
+        margin-bottom: 0;
+      }
+
+      .list-group-item {
+        border: none;
+        border-radius: 6px !important;
+        margin-bottom: 5px;
+        padding: 12px 15px;
+        background-color: #f8f9fa;
+        transition: all 0.2s ease;
+      }
+
+      .list-group-item:last-child {
+        margin-bottom: 0;
+      }
+
+      .list-group-item:hover {
+        background-color: #e9ecef;
+        transform: translateX(5px);
+      }
+
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: #888;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: #555;
+      }
+
+      #status::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+        background-color: #dc3545;
+      }
+
+      #status.connected::before {
+        background-color: #28a745;
+      }
+
+      @media (max-height: 600px) {
+        .container-fluid {
+          gap: 10px;
+          padding: 10px;
+        }
+
+        .header {
+          padding: 10px;
+        }
+
+        #current-video {
+          flex: 0 0 40px;
+          padding: 10px;
+        }
+
+        .bottom-section {
+          gap: 10px;
+        }
+      }
+
+      @media (max-width: 768px) {
+        #control-panel {
+          flex: 0 0 120px;
+        }
+
+        .btn {
+          padding: 6px 12px;
+          font-size: 0.8rem;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container-fluid">
+      <div class="header">
+        <h2><i class="fas fa-video me-2"></i>Live Streamer</h2>
+      </div>
+      <div id="status">WebSocket Status: Disconnected</div>
+      <div id="output-container">
+        <textarea id="messages" class="form-control" readonly>
+消息区域</textarea
+        >
+      </div>
+      <div id="app-container">
+        <div id="current-video">
+          <i class="fas fa-play-circle me-2"></i><span>当前播放: 无</span>
+        </div>
+        <div class="bottom-section">
+          <div id="control-panel">
+            <button class="btn btn-primary" onclick="previousVideo()">
+              <i class="fas fa-step-backward me-2"></i>上一个
+            </button>
+            <button class="btn btn-primary" onclick="nextVideo()">
+              <i class="fas fa-step-forward me-2"></i>下一个
+            </button>
+            <button class="btn btn-danger" onclick="closeConnection()">
+              <i class="fas fa-power-off me-2"></i>关闭推流
+            </button>
+          </div>
+          <div id="video-list-container">
+            <div id="video-list"><i class="fas fa-list me-2"></i>视频列表</div>
+            <ul class="list-group list-group-flush">
+              <!-- <li class="list-group-item">
+                            <i class="fas fa-file-video me-2"></i>Cras justo odio
+                        </li> -->
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      const ws = new WebSocket("ws://localhost:8080/ws");
+      const statusDisplay = document.getElementById("status");
+      const currentVideo = document.getElementById("current-video");
+      const videoList = document.getElementById("video-list");
+      const messagesArea = document.getElementById("messages");
+
+      ws.onopen = function () {
+        statusDisplay.textContent = "WebSocket Status: Connected";
+        statusDisplay.classList.add("connected");
+      };
+
+      ws.onmessage = function (evt) {
+        appendMessage(evt.data);
+      };
+
+      ws.onclose = function () {
+        statusDisplay.textContent = "WebSocket Status: Disconnected";
+        statusDisplay.classList.remove("connected");
+      };
+
+      function appendMessage(message) {
+        const timestamp = new Date().toLocaleTimeString();
+        messagesArea.value += `[${timestamp}] ${message}\n`;
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+      }
+
+      function updateCurrentVideo() {
+        fetch("/video/current")
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.success) {
+              document.querySelector("#current-video>span").innerHTML =
+                data.data;
+            }
+          });
+      }
+
+      function updateVideoList() {
+        fetch("/video/list")
+          .then((response) => response.json())
+          .then((data) => {
+            const listContainer = document.querySelector(
+              "#video-list-container .list-group"
+            );
+            listContainer.innerHTML = "";
+            if (data.success) {
+              for (let item of data.data) {
+                listContainer.innerHTML += `<li class="list-group-item">
+                            <i class="fas fa-file-video me-2"></i>${item}</li>`;
+              }
+            }
+          });
+      }
+
+      updateCurrentVideo();
+      updateVideoList();
+      setInterval(updateCurrentVideo, 5000);
+      setInterval(updateVideoList, 5000);
+
+      function previousVideo() {
+        ws.send("prev");
+      }
+
+      function nextVideo() {
+        ws.send("next");
+      }
+
+      function closeConnection() {
+        if (confirm("确定要关闭服务器吗？")) {
+          ws.send("quit");
+        }
+      }
+    </script>
+  </body>
+</html>
