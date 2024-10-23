@@ -44,7 +44,7 @@ type LogConfig struct {
 }
 
 type AuthConfig struct {
-	Key string `json:"key"`
+	Token string `json:"token"`
 }
 
 type Config struct {

@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"io"
 	"live-streamer/config"
-	"live-streamer/logger"
+	"live-streamer/websocket"
+	"log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -21,18 +22,18 @@ type Streamer struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	mu                sync.Mutex
-	logger            logger.Logger
+	outputer          websocket.Outputer
 }
 
 var GlobalStreamer *Streamer
 
-func NewStreamer(videoList []config.InputItem, logger logger.Logger) *Streamer {
+func NewStreamer(videoList []config.InputItem, outputer websocket.Outputer) *Streamer {
 	GlobalStreamer = &Streamer{
 		videoList:         videoList,
 		currentVideoIndex: 0,
 		cmd:               nil,
 		ctx:               nil,
-		logger:            logger,
+		outputer:          outputer,
 	}
 	return GlobalStreamer
 }
@@ -54,7 +55,7 @@ func (s *Streamer) start() {
 
 	currentVideo := s.videoList[s.currentVideoIndex]
 	videoPath := currentVideo.Path
-	s.logger.Println("start stream: ", videoPath)
+	s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprint("start stream: ", videoPath)))
 
 	s.mu.Lock()
 	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
@@ -62,21 +63,21 @@ func (s *Streamer) start() {
 
 	pipe, err := s.cmd.StderrPipe()
 	if err != nil {
-		s.logger.Printf("failed to get pipe: %v", err)
+		log.Printf("failed to get pipe: %v", err)
 		return
 	}
 
 	reader := bufio.NewReader(pipe)
 
 	if err := s.cmd.Start(); err != nil {
-		s.logger.Printf("starting ffmpeg error: %v\n", err)
+		s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprintf("starting ffmpeg error: %v\n", err)))
 		return
 	}
 
 	go s.log(reader)
 
 	<-s.ctx.Done()
-	s.logger.Printf("stop stream: %s", videoPath)
+	s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprintf("stop stream: %s", videoPath)))
 
 	// stream next video
 	s.currentVideoIndex++
@@ -156,11 +157,11 @@ func (s *Streamer) log(reader *bufio.Reader) {
 			if n > 0 {
 				videoPath, _ := s.GetCurrentVideoPath()
 				buf = append([]byte(videoPath), buf...)
-				s.logger.Print(string(buf[:n]))
+				s.outputer.Broadcast(websocket.MakeOutput(string(buf[:n+len(videoPath)])))
 			}
 			if err != nil {
 				if err != io.EOF {
-					s.logger.Printf("reading ffmpeg error: %v\n", err)
+					s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprintf("reading ffmpeg output error: %v\n", err)))
 				}
 				break
 			}

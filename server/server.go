@@ -2,12 +2,16 @@ package server
 
 import (
 	"embed"
-	"fmt"
 	"html/template"
+	"live-streamer/config"
+	mywebsocket "live-streamer/websocket"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	uuid "github.com/gofrs/uuid/v5"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,18 +24,20 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-type InputFunc func(string)
+type InputFunc func(mywebsocket.Response)
 
 type Server struct {
 	addr          string
-	outputChan    chan string
 	dealInputFunc InputFunc
-	clients       []*Client
+	clients       map[string]*Client
 	historyOutput string
+	mu            sync.Mutex
 }
 
 type Client struct {
+	id   string
 	conn *websocket.Conn
+	mu   sync.Mutex
 }
 
 var GlobalServer *Server
@@ -39,22 +45,21 @@ var GlobalServer *Server
 func NewServer(addr string, dealInputFunc InputFunc) {
 	GlobalServer = &Server{
 		addr:          addr,
-		outputChan:    make(chan string),
 		dealInputFunc: dealInputFunc,
+		clients:       make(map[string]*Client),
+		historyOutput: "",
 	}
 }
 
 func (s *Server) Run() {
-	router := gin.Default()
+	router := gin.New()
 	tpl, err := template.ParseFS(staticFiles, "static/*")
 	if err != nil {
 		log.Fatalf("Error parsing templates: %v", err)
 	}
 	router.SetHTMLTemplate(tpl)
 
-	router.GET("/ws", s.handleWebSocket)
-	router.GET("/video/current", GetCurrentVideo)
-	router.GET("/video/list", GetVideoList)
+	router.GET("/ws", AuthMiddleware(), s.handleWebSocket)
 	router.GET(
 		"/", func(c *gin.Context) {
 			c.HTML(200, "index.html", nil)
@@ -66,16 +71,6 @@ func (s *Server) Run() {
 			log.Fatalf("Error starting server: %v", err)
 		}
 	}()
-
-	go func() {
-		for {
-			output := <-s.outputChan
-			s.historyOutput += output
-			for _, client := range s.clients {
-				_ = client.conn.WriteMessage(websocket.TextMessage, []byte(output))
-			}
-		}
-	}()
 }
 
 func (s *Server) handleWebSocket(c *gin.Context) {
@@ -83,43 +78,89 @@ func (s *Server) handleWebSocket(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	defer ws.Close()
-	client := &Client{conn: ws}
-	s.clients = append(s.clients, client)
-	_ = client.conn.WriteMessage(websocket.TextMessage, []byte(s.historyOutput))
+
+	ws.SetCloseHandler(func(code int, text string) error {
+		return nil
+	})
+
+	id, err := uuid.NewV7()
+	if err != nil {
+		log.Printf("generating uuid error: %v", err)
+		return
+	}
+	client := &Client{id: id.String(), conn: ws}
+	s.mu.Lock()
+	s.clients[client.id] = client
+	s.mu.Unlock()
+	// write history output
+	s.Single(client.id, mywebsocket.MakeOutput(s.historyOutput))
 
 	defer func() {
-		for i, c := range s.clients {
-			if c == client {
-				s.clients = append(s.clients[:i], s.clients[i+1:]...)
-				break
-			}
+		client.mu.Lock()
+		ws.Close()
+		client.mu.Unlock()
+		s.mu.Lock()
+		delete(s.clients, client.id)
+		s.mu.Unlock()
+		if r := recover(); r != nil {
+			log.Printf("webSocket handler panic: %v", r)
 		}
 	}()
 
 	for {
 		// recive message
-		_, msg, err := ws.ReadMessage()
+		client.mu.Lock()
+		msg := mywebsocket.Response{}
+		err := ws.ReadJSON(&msg)
+		client.mu.Unlock()
 		if err != nil {
-			log.Printf("Websocket reading message error: %v", err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("websocket error: %v", err)
+			}
 			break
 		}
-		s.dealInputFunc(string(msg))
+		s.dealInputFunc(msg)
 	}
 }
 
-func (s *Server) Print(msg ...any) {
-	s.outputChan <- fmt.Sprint(msg...)
+func AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if config.GlobalConfig.Auth.Token == "" ||
+			c.Query("token") == config.GlobalConfig.Auth.Token {
+			c.Next()
+		} else {
+			c.AbortWithStatus(http.StatusUnauthorized)
+		}
+	}
 }
 
-func (s *Server) Println(msg ...any) {
-	s.outputChan <- fmt.Sprintln(msg...)
+func (s *Server) Broadcast(obj mywebsocket.Response) {
+	s.mu.Lock()
+	if obj.Type == mywebsocket.TypeOutput {
+		s.historyOutput += obj.Data.(string)
+	}
+	for _, client := range s.clients {
+		obj.UserID = client.id
+		obj.Timestamp = time.Now().UnixMilli()
+		if err := client.conn.WriteJSON(obj); err != nil {
+			log.Printf("websocket writing message error: %v", err)
+		}
+	}
+	s.mu.Unlock()
 }
 
-func (s *Server) Printf(format string, args ...interface{}) {
-	s.outputChan <- fmt.Sprintf(format, args...)
+func (s *Server) Single(userID string, obj mywebsocket.Response) {
+	s.mu.Lock()
+	if client, ok := s.clients[userID]; ok {
+		obj.UserID = userID
+		obj.Timestamp = time.Now().UnixMilli()
+		if err := client.conn.WriteJSON(obj); err != nil {
+			log.Printf("websocket writing message error: %v", err)
+		}
+	}
+	s.mu.Unlock()
 }
 
 func (s *Server) Close() {
-	close(s.outputChan)
+
 }
