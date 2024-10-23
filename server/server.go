@@ -4,6 +4,7 @@ import (
 	"embed"
 	"html/template"
 	"live-streamer/config"
+	"live-streamer/streamer"
 	mywebsocket "live-streamer/websocket"
 	"log"
 	"net/http"
@@ -24,20 +25,20 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-type InputFunc func(mywebsocket.Response)
+type InputFunc func(mywebsocket.RequestType)
 
 type Server struct {
 	addr          string
 	dealInputFunc InputFunc
 	clients       map[string]*Client
-	historyOutput string
 	mu            sync.Mutex
 }
 
 type Client struct {
-	id   string
-	conn *websocket.Conn
-	mu   sync.Mutex
+	id          string
+	conn        *websocket.Conn
+	mu          sync.Mutex
+	hasSentSize int
 }
 
 var GlobalServer *Server
@@ -47,7 +48,6 @@ func NewServer(addr string, dealInputFunc InputFunc) {
 		addr:          addr,
 		dealInputFunc: dealInputFunc,
 		clients:       make(map[string]*Client),
-		historyOutput: "",
 	}
 }
 
@@ -88,12 +88,10 @@ func (s *Server) handleWebSocket(c *gin.Context) {
 		log.Printf("generating uuid error: %v", err)
 		return
 	}
-	client := &Client{id: id.String(), conn: ws}
+	client := &Client{id: id.String(), conn: ws, hasSentSize: 0}
 	s.mu.Lock()
 	s.clients[client.id] = client
 	s.mu.Unlock()
-	// write history output
-	s.Single(client.id, mywebsocket.MakeOutput(s.historyOutput))
 
 	defer func() {
 		client.mu.Lock()
@@ -107,10 +105,24 @@ func (s *Server) handleWebSocket(c *gin.Context) {
 		}
 	}()
 
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		for range ticker.C {
+			streamer.GlobalStreamer.TruncateOutput()
+			currentVideoPath, _ := streamer.GlobalStreamer.GetCurrentVideoPath()
+			s.Broadcast(mywebsocket.Date{
+				Timestamp:        time.Now().UnixMilli(),
+				CurrentVideoPath: currentVideoPath,
+				VideoList:        streamer.GlobalStreamer.GetVideoListPath(),
+				Output:           streamer.GlobalStreamer.GetOutput(),
+			})
+		}
+	}()
+
 	for {
 		// recive message
 		client.mu.Lock()
-		msg := mywebsocket.Response{}
+		msg := mywebsocket.Request{}
 		err := ws.ReadJSON(&msg)
 		client.mu.Unlock()
 		if err != nil {
@@ -119,7 +131,7 @@ func (s *Server) handleWebSocket(c *gin.Context) {
 			}
 			break
 		}
-		s.dealInputFunc(msg)
+		s.dealInputFunc(msg.Type)
 	}
 }
 
@@ -134,13 +146,9 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
-func (s *Server) Broadcast(obj mywebsocket.Response) {
+func (s *Server) Broadcast(obj mywebsocket.Date) {
 	s.mu.Lock()
-	if obj.Type == mywebsocket.TypeOutput {
-		s.historyOutput += obj.Data.(string)
-	}
 	for _, client := range s.clients {
-		obj.UserID = client.id
 		obj.Timestamp = time.Now().UnixMilli()
 		if err := client.conn.WriteJSON(obj); err != nil {
 			log.Printf("websocket writing message error: %v", err)
@@ -149,10 +157,9 @@ func (s *Server) Broadcast(obj mywebsocket.Response) {
 	s.mu.Unlock()
 }
 
-func (s *Server) Single(userID string, obj mywebsocket.Response) {
+func (s *Server) Single(userID string, obj mywebsocket.Date) {
 	s.mu.Lock()
 	if client, ok := s.clients[userID]; ok {
-		obj.UserID = userID
 		obj.Timestamp = time.Now().UnixMilli()
 		if err := client.conn.WriteJSON(obj); err != nil {
 			log.Printf("websocket writing message error: %v", err)

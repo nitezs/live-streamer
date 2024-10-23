@@ -1,30 +1,53 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
 	"live-streamer/config"
 	"live-streamer/server"
 	"live-streamer/streamer"
 	"live-streamer/utils"
-	"live-streamer/websocket"
 	"log"
+	"os"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 var GlobalStreamer *streamer.Streamer
-var outputer websocket.Outputer
 
 func main() {
 	server.NewServer(":8080", websocketRequestHandler)
 	server.GlobalServer.Run()
-	outputer = server.GlobalServer
 	if !utils.HasFFMPEG() {
 		log.Fatal("ffmpeg not found")
 	}
-	GlobalStreamer = streamer.NewStreamer(config.GlobalConfig.VideoList, outputer)
+	GlobalStreamer = streamer.NewStreamer(config.GlobalConfig.VideoList)
 	go startWatcher()
+	go input()
 	GlobalStreamer.Stream()
 	GlobalStreamer.Close()
+}
+
+func input() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := scanner.Text() // 获取用户输入的内容
+		switch line {
+		case "list":
+			fmt.Println(GlobalStreamer.GetVideoListPath())
+		case "index":
+			fmt.Println(GlobalStreamer.GetCurrentIndex())
+		case "next":
+			GlobalStreamer.Next()
+		case "prev":
+			GlobalStreamer.Prev()
+		case "quit":
+			GlobalStreamer.Close()
+			os.Exit(0)
+		case "current":
+			fmt.Println(GlobalStreamer.GetCurrentVideoPath())
+		}
+	}
 }
 
 func startWatcher() {
@@ -56,11 +79,9 @@ func startWatcher() {
 				if utils.IsSupportedVideo(event.Name) {
 					log.Println("new video added:", event.Name)
 					GlobalStreamer.Add(event.Name)
-					server.GlobalServer.Broadcast(websocket.MakeResponse(websocket.TypeAddVideo, true, event.Name, ""))
 				}
 			}
 			if event.Op&fsnotify.Remove == fsnotify.Remove {
-				server.GlobalServer.Broadcast(websocket.MakeResponse(websocket.TypeRemoveVideo, true, event.Name, ""))
 				log.Println("video removed:", event.Name)
 				GlobalStreamer.Remove(event.Name)
 			}

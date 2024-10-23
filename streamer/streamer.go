@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"live-streamer/config"
-	"live-streamer/websocket"
 	"log"
+	"math"
 	"os/exec"
 	"strings"
 	"sync"
@@ -21,21 +21,58 @@ type Streamer struct {
 	cmd               *exec.Cmd
 	ctx               context.Context
 	cancel            context.CancelFunc
+	output            strings.Builder
+	manualControl     bool
 	mu                sync.Mutex
-	outputer          websocket.Outputer
 }
 
 var GlobalStreamer *Streamer
 
-func NewStreamer(videoList []config.InputItem, outputer websocket.Outputer) *Streamer {
+func NewStreamer(videoList []config.InputItem) *Streamer {
 	GlobalStreamer = &Streamer{
 		videoList:         videoList,
 		currentVideoIndex: 0,
 		cmd:               nil,
 		ctx:               nil,
-		outputer:          outputer,
 	}
 	return GlobalStreamer
+}
+
+func (s *Streamer) start() {
+	s.mu.Lock()
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	currentVideo := s.videoList[s.currentVideoIndex]
+	videoPath := currentVideo.Path
+	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
+	s.mu.Unlock()
+	s.writeOutput(fmt.Sprintln("start stream: ", videoPath))
+	pipe, err := s.cmd.StderrPipe()
+	if err != nil {
+		log.Printf("failed to get pipe: %v", err)
+		return
+	}
+
+	reader := bufio.NewReader(pipe)
+
+	if err := s.cmd.Start(); err != nil {
+		s.writeOutput(fmt.Sprintf("starting ffmpeg error: %v\n", err))
+		return
+	}
+
+	go s.log(reader)
+
+	<-s.ctx.Done()
+	s.writeOutput(fmt.Sprintf("stop stream: %s\n", videoPath))
+
+	if s.manualControl {
+		s.manualControl = false
+	} else {
+		// stream next video
+		s.currentVideoIndex++
+		if s.currentVideoIndex >= len(s.videoList) {
+			s.currentVideoIndex = 0
+		}
+	}
 }
 
 func (s *Streamer) Stream() {
@@ -48,52 +85,17 @@ func (s *Streamer) Stream() {
 	}
 }
 
-func (s *Streamer) start() {
-	s.Stop()
-
-	s.ctx, s.cancel = context.WithCancel(context.Background())
-
-	currentVideo := s.videoList[s.currentVideoIndex]
-	videoPath := currentVideo.Path
-	s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprint("start stream: ", videoPath)))
-
-	s.mu.Lock()
-	s.cmd = exec.CommandContext(s.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
-	s.mu.Unlock()
-
-	pipe, err := s.cmd.StderrPipe()
-	if err != nil {
-		log.Printf("failed to get pipe: %v", err)
-		return
-	}
-
-	reader := bufio.NewReader(pipe)
-
-	if err := s.cmd.Start(); err != nil {
-		s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprintf("starting ffmpeg error: %v\n", err)))
-		return
-	}
-
-	go s.log(reader)
-
-	<-s.ctx.Done()
-	s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprintf("stop stream: %s", videoPath)))
-
-	// stream next video
-	s.currentVideoIndex++
-	if s.currentVideoIndex >= len(s.videoList) {
-		s.currentVideoIndex = 0
-	}
-}
-
 func (s *Streamer) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.cancel != nil {
 		stopped := make(chan error)
 		go func() {
-			stopped <- s.cmd.Wait()
+			if s.cmd != nil {
+				stopped <- s.cmd.Wait()
+			}
 		}()
 		s.cancel()
-		s.mu.Lock()
 		if s.cmd != nil && s.cmd.Process != nil {
 			select {
 			case <-stopped:
@@ -104,15 +106,24 @@ func (s *Streamer) Stop() {
 			}
 			s.cmd = nil
 		}
-		s.mu.Unlock()
 	}
 }
 
+func (s *Streamer) writeOutput(str string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.output.WriteString(str)
+}
+
 func (s *Streamer) Add(videoPath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.videoList = append(s.videoList, config.InputItem{Path: videoPath})
 }
 
 func (s *Streamer) Remove(videoPath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, item := range s.videoList {
 		if item.Path == videoPath {
 			s.videoList = append(s.videoList[:i], s.videoList[i+1:]...)
@@ -128,18 +139,24 @@ func (s *Streamer) Remove(videoPath string) {
 }
 
 func (s *Streamer) Prev() {
+	s.mu.Lock()
+	s.manualControl = true
 	s.currentVideoIndex--
 	if s.currentVideoIndex < 0 {
 		s.currentVideoIndex = len(s.videoList) - 1
 	}
+	s.mu.Unlock()
 	s.Stop()
 }
 
 func (s *Streamer) Next() {
+	s.mu.Lock()
+	s.manualControl = true
 	s.currentVideoIndex++
 	if s.currentVideoIndex >= len(s.videoList) {
 		s.currentVideoIndex = 0
 	}
+	s.mu.Unlock()
 	s.Stop()
 }
 
@@ -157,16 +174,70 @@ func (s *Streamer) log(reader *bufio.Reader) {
 			if n > 0 {
 				videoPath, _ := s.GetCurrentVideoPath()
 				buf = append([]byte(videoPath), buf...)
-				s.outputer.Broadcast(websocket.MakeOutput(string(buf[:n+len(videoPath)])))
+				s.writeOutput(string(buf[:n+len(videoPath)]))
 			}
 			if err != nil {
 				if err != io.EOF {
-					s.outputer.Broadcast(websocket.MakeOutput(fmt.Sprintf("reading ffmpeg output error: %v\n", err)))
+					s.writeOutput(fmt.Sprintf("reading ffmpeg output error: %v\n", err))
 				}
 				break
 			}
 		}
 	}
+}
+
+func (s *Streamer) GetCurrentVideoPath() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.videoList) == 0 {
+		return "", errors.New("no video streaming")
+	}
+	return s.videoList[s.currentVideoIndex].Path, nil
+}
+
+func (s *Streamer) GetVideoList() []config.InputItem {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.videoList
+}
+
+func (s *Streamer) GetVideoListPath() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var videoList []string
+	for _, item := range s.videoList {
+		videoList = append(videoList, item.Path)
+	}
+	return videoList
+}
+
+func (s *Streamer) GetCurrentIndex() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentVideoIndex
+}
+
+func (s *Streamer) GetOutput() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.output.String()
+}
+
+func (s *Streamer) TruncateOutput() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	currentSize := s.output.Len()
+	if currentSize > math.MaxInt {
+		newStart := currentSize - math.MaxInt
+		trimmedOutput := s.output.String()[newStart:]
+		s.output.Reset()
+		s.output.WriteString(trimmedOutput)
+	}
+	return currentSize
+}
+
+func (s *Streamer) Close() {
+	s.Stop()
 }
 
 func (s *Streamer) buildFFmpegArgs(videoItem config.InputItem) []string {
@@ -208,31 +279,4 @@ func (s *Streamer) buildFFmpegArgs(videoItem config.InputItem) []string {
 	// logger.GlobalLogger.Println("ffmpeg args: ", args)
 
 	return args
-}
-
-func (s *Streamer) GetCurrentVideoPath() (string, error) {
-	if len(s.videoList) == 0 {
-		return "", errors.New("no video streaming")
-	}
-	return s.videoList[s.currentVideoIndex].Path, nil
-}
-
-func (s *Streamer) GetVideoList() []config.InputItem {
-	return s.videoList
-}
-
-func (s *Streamer) GetVideoListPath() []string {
-	var videoList []string
-	for _, item := range s.videoList {
-		videoList = append(videoList, item.Path)
-	}
-	return videoList
-}
-
-func (s *Streamer) GetCurrentIndex() int {
-	return s.currentVideoIndex
-}
-
-func (s *Streamer) Close() {
-	s.Stop()
 }
