@@ -7,6 +7,7 @@ import (
 	"live-streamer/utils"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -32,6 +33,12 @@ func input() {
 			GlobalStreamer.Prev()
 		case "next":
 			GlobalStreamer.Next()
+		case "quit":
+			GlobalStreamer.Close()
+			os.Exit(0)
+		case "list":
+			list := GlobalStreamer.GetVideoListPath()
+			log.Println(strings.Join(list, "\n"))
 		default:
 			log.Println("unknown command")
 		}
