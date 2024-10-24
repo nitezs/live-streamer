@@ -3,7 +3,6 @@ package streamer
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"live-streamer/config"
@@ -21,6 +20,7 @@ type playState struct {
 	cmd               *exec.Cmd
 	ctx               context.Context
 	cancel            context.CancelFunc
+	waitDone          chan any
 }
 
 type Streamer struct {
@@ -52,6 +52,7 @@ func (s *Streamer) start() {
 	currentVideo := s.videoList[s.playState.currentVideoIndex]
 	videoPath := currentVideo.Path
 	s.playState.cmd = exec.CommandContext(s.playState.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
+	s.playState.waitDone = make(chan any)
 	cmd := s.playState.cmd
 	s.playStateMu.Unlock()
 
@@ -89,6 +90,7 @@ func (s *Streamer) start() {
 		}
 		s.videoMu.RUnlock()
 	}
+	close(s.playState.waitDone)
 	s.playStateMu.Unlock()
 }
 
@@ -108,7 +110,7 @@ func (s *Streamer) Stop() {
 	s.playState.cancel = nil
 	cmd := s.playState.cmd
 	s.playState.cmd = nil
-	ctx := s.playState.ctx
+	done := s.playState.waitDone
 	s.playStateMu.Unlock()
 
 	if cancel == nil || cmd == nil {
@@ -119,7 +121,7 @@ func (s *Streamer) Stop() {
 
 	if cmd.Process != nil {
 		select {
-		case <-ctx.Done():
+		case <-done:
 		case <-time.After(3 * time.Second):
 			_ = cmd.Process.Kill()
 		}
@@ -220,7 +222,7 @@ func (s *Streamer) log(reader *bufio.Reader) {
 		for {
 			n, err := reader.Read(buf)
 			if n > 0 {
-				videoPath, _ := s.GetCurrentVideoPath()
+				videoPath := s.GetCurrentVideoPath()
 				buf = append([]byte(videoPath), buf...)
 				s.writeOutput(string(buf[:n+len(videoPath)]))
 			}
@@ -234,13 +236,13 @@ func (s *Streamer) log(reader *bufio.Reader) {
 	}
 }
 
-func (s *Streamer) GetCurrentVideoPath() (string, error) {
+func (s *Streamer) GetCurrentVideoPath() string {
 	s.videoMu.RLock()
 	defer s.videoMu.RUnlock()
 	if len(s.videoList) == 0 {
-		return "", errors.New("no video streaming")
+		return ""
 	}
-	return s.videoList[s.GetCurrentIndex()].Path, nil
+	return s.videoList[s.GetCurrentIndex()].Path
 }
 
 func (s *Streamer) GetVideoList() []config.InputItem {

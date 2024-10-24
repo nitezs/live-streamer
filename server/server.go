@@ -109,10 +109,9 @@ func (s *Server) handleWebSocket(c *gin.Context) {
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
 		for range ticker.C {
-			currentVideoPath, _ := streamer.GlobalStreamer.GetCurrentVideoPath()
 			s.Broadcast(mywebsocket.Date{
 				Timestamp:        time.Now().UnixMilli(),
-				CurrentVideoPath: currentVideoPath,
+				CurrentVideoPath: streamer.GlobalStreamer.GetCurrentVideoPath(),
 				VideoList:        streamer.GlobalStreamer.GetVideoListPath(),
 				Output:           streamer.GlobalStreamer.GetOutput(),
 			})
