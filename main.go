@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"fmt"
+
 	"live-streamer/config"
+	"live-streamer/constant"
 	"live-streamer/server"
 	"live-streamer/streamer"
 	"live-streamer/utils"
@@ -17,7 +19,8 @@ import (
 var GlobalStreamer *streamer.Streamer
 
 func main() {
-	server.NewServer(":8080", websocket.RequestHandler)
+	fmt.Println("Version: " + constant.Version)
+	server.NewServer(config.GlobalConfig.Server.Addr, websocket.RequestHandler)
 	server.GlobalServer.Run()
 	if !utils.HasFFMPEG() {
 		log.Fatal("ffmpeg not found")
@@ -32,7 +35,7 @@ func main() {
 func input() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		line := scanner.Text() // 获取用户输入的内容
+		line := scanner.Text()
 		switch line {
 		case "list":
 			fmt.Println(GlobalStreamer.GetVideoListPath())

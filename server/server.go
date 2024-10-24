@@ -136,8 +136,8 @@ func (s *Server) handleWebSocket(c *gin.Context) {
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if config.GlobalConfig.Auth.Token == "" ||
-			c.Query("token") == config.GlobalConfig.Auth.Token {
+		if config.GlobalConfig.Server.Token == "" ||
+			c.Query("token") == config.GlobalConfig.Server.Token {
 			c.Next()
 		} else {
 			c.AbortWithStatus(http.StatusUnauthorized)

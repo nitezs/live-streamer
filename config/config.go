@@ -43,7 +43,8 @@ type LogConfig struct {
 	PlayState bool `json:"play_state"`
 }
 
-type AuthConfig struct {
+type ServerConfig struct {
+	Addr  string `json:"addr"`
 	Token string `json:"token"`
 }
 
@@ -54,7 +55,7 @@ type Config struct {
 	Play       PlayConfig   `json:"play"`
 	Output     OutputConfig `json:"output"`
 	Log        LogConfig    `json:"log"`
-	Auth       AuthConfig   `json:"auth"`
+	Server     ServerConfig `json:"server"`
 }
 
 var GlobalConfig Config
@@ -103,6 +104,22 @@ func readConfig(configPath string) error {
 	err = validateConfig()
 	if err != nil {
 		return fmt.Errorf("config validate failed: %v", err)
+	}
+	return nil
+}
+
+func validateConfig() error {
+	if err := validateInputConfig(); err != nil {
+		return err
+	}
+	if err := validateOutputConfig(); err != nil {
+		return err
+	}
+	if err := validatePlayConfig(); err != nil {
+		return err
+	}
+	if err := validateServerConfig(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -192,15 +209,9 @@ func validatePlayConfig() error {
 	return nil
 }
 
-func validateConfig() error {
-	if err := validateInputConfig(); err != nil {
-		return err
-	}
-	if err := validateOutputConfig(); err != nil {
-		return err
-	}
-	if err := validatePlayConfig(); err != nil {
-		return err
+func validateServerConfig() error {
+	if GlobalConfig.Server.Addr == "" {
+		GlobalConfig.Server.Addr = ":8080"
 	}
 	return nil
 }
