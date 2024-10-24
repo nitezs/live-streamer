@@ -52,6 +52,7 @@ func NewServer(addr string, dealInputFunc InputFunc) {
 }
 
 func (s *Server) Run() {
+	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	tpl, err := template.ParseFS(staticFiles, "static/*")
 	if err != nil {

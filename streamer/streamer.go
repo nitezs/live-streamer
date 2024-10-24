@@ -8,6 +8,7 @@ import (
 	"io"
 	"live-streamer/config"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -47,11 +48,11 @@ func NewStreamer(videoList []config.InputItem) *Streamer {
 func (s *Streamer) start() {
 	s.playStateMu.Lock()
 	s.playState.ctx, s.playState.cancel = context.WithCancel(context.Background())
+	cancel := s.playState.cancel
 	currentVideo := s.videoList[s.playState.currentVideoIndex]
 	videoPath := currentVideo.Path
 	s.playState.cmd = exec.CommandContext(s.playState.ctx, "ffmpeg", s.buildFFmpegArgs(currentVideo)...)
 	cmd := s.playState.cmd
-	ctx := s.playState.ctx
 	s.playStateMu.Unlock()
 
 	s.writeOutput(fmt.Sprintln("start stream: ", videoPath))
@@ -71,7 +72,9 @@ func (s *Streamer) start() {
 
 	go s.log(reader)
 
-	<-ctx.Done()
+	_ = cmd.Wait()
+	cancel()
+
 	s.writeOutput(fmt.Sprintf("stop stream: %s\n", videoPath))
 
 	s.playStateMu.Lock()
@@ -102,33 +105,24 @@ func (s *Streamer) Stream() {
 func (s *Streamer) Stop() {
 	s.playStateMu.Lock()
 	cancel := s.playState.cancel
-	cmd := s.playState.cmd
 	s.playState.cancel = nil
+	cmd := s.playState.cmd
 	s.playState.cmd = nil
+	ctx := s.playState.ctx
 	s.playStateMu.Unlock()
 
 	if cancel == nil || cmd == nil {
 		return
 	}
 
-	stopped := make(chan error, 1)
-	go func() {
-		if cmd.Process != nil {
-			stopped <- cmd.Wait()
-		} else {
-			stopped <- nil
-		}
-	}()
-
 	cancel()
 
 	if cmd.Process != nil {
 		select {
-		case <-stopped:
+		case <-ctx.Done():
 		case <-time.After(3 * time.Second):
 			_ = cmd.Process.Kill()
 		}
-		close(stopped)
 	}
 }
 
@@ -285,6 +279,7 @@ func (s *Streamer) GetOutput() string {
 
 func (s *Streamer) Close() {
 	s.Stop()
+	os.Exit(0)
 }
 
 func (s *Streamer) buildFFmpegArgs(videoItem config.InputItem) []string {
@@ -295,13 +290,12 @@ func (s *Streamer) buildFFmpegArgs(videoItem config.InputItem) []string {
 		args = append(args, "-ss", videoItem.Start)
 	}
 
-	args = append(args, "-i", videoPath)
-
 	if videoItem.End != "" {
 		args = append(args, "-to", videoItem.End)
 	}
 
 	args = append(args,
+		"-i", videoPath,
 		"-c:v", config.GlobalConfig.Play.VideoCodec,
 		"-preset", config.GlobalConfig.Play.Preset,
 		"-crf", fmt.Sprintf("%d", config.GlobalConfig.Play.CRF),
@@ -313,7 +307,6 @@ func (s *Streamer) buildFFmpegArgs(videoItem config.InputItem) []string {
 		"-b:a", config.GlobalConfig.Play.AudioBitrate,
 		"-ar", fmt.Sprintf("%d", config.GlobalConfig.Play.AudioSampleRate),
 		"-f", config.GlobalConfig.Play.OutputFormat,
-		"-stats", "-loglevel", "info",
 	)
 
 	if config.GlobalConfig.Play.CustomArgs != "" {
@@ -323,7 +316,7 @@ func (s *Streamer) buildFFmpegArgs(videoItem config.InputItem) []string {
 
 	args = append(args, fmt.Sprintf("%s/%s", config.GlobalConfig.Output.RTMPServer, config.GlobalConfig.Output.StreamKey))
 
-	// logger.GlobalLogger.Println("ffmpeg args: ", args)
+	log.Println("ffmpeg args: ", args)
 
 	return args
 }

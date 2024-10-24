@@ -47,7 +47,6 @@ func input() {
 			GlobalStreamer.Prev()
 		case "quit":
 			GlobalStreamer.Close()
-			os.Exit(0)
 		case "current":
 			fmt.Println(GlobalStreamer.GetCurrentVideoPath())
 		}

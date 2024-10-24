@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"live-streamer/streamer"
-	"os"
 )
 
 type RequestType string
@@ -32,6 +31,5 @@ func RequestHandler(reqType RequestType) {
 		streamer.GlobalStreamer.Prev()
 	case TypeQuit:
 		streamer.GlobalStreamer.Close()
-		os.Exit(0)
 	}
 }

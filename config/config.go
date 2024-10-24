@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 )
 
@@ -63,18 +62,7 @@ var GlobalConfig Config
 func init() {
 	GlobalConfig = Config{}
 	err := readConfig("config.json")
-	for i, item := range GlobalConfig.InputItems {
-		if item.ItemType == "file" {
-			GlobalConfig.VideoList = append(GlobalConfig.VideoList, item)
-		} else if item.ItemType == "dir" {
-			videos, err := getAllVideos(item.Path)
-			if err != nil {
-				log.Fatalf("input[%v] walk error: %v", i, err)
-			}
-			GlobalConfig.VideoList = append(GlobalConfig.VideoList, videos...)
-		}
-	}
-	if len(GlobalConfig.VideoList) == 0 {
+	if len(GlobalConfig.Input) == 0 {
 		log.Fatal("No input video found")
 	}
 	if err != nil {
@@ -127,31 +115,66 @@ func validateConfig() error {
 func validateInputConfig() error {
 	if GlobalConfig.Input == nil {
 		return errors.New("video_path is nil")
-	} else {
-		for i, item := range GlobalConfig.Input {
-			typeOf := reflect.TypeOf(item)
-			var inputItem InputItem
-			if typeOf.Kind() == reflect.String {
-				inputItem = InputItem{Path: item.(string)}
-			}
-			if inputItem.Path == "" {
-				return fmt.Errorf("video_path[%v] is empty", i)
-			}
-			stat, err := os.Stat(inputItem.Path)
-			if err != nil {
-				return fmt.Errorf("video_path[%v] stat failed: %v", i, err)
-			}
-			if stat.IsDir() {
-				inputItem.ItemType = "dir"
-			} else {
-				inputItem.ItemType = "file"
-				if !utils.IsSupportedVideo(inputItem.Path) {
-					return fmt.Errorf("video_path[%v] is not supported", i)
-				}
-			}
-			GlobalConfig.InputItems = append(GlobalConfig.InputItems, inputItem)
-		}
 	}
+
+	GlobalConfig.InputItems = make([]InputItem, 0, len(GlobalConfig.Input))
+	GlobalConfig.VideoList = []InputItem{}
+
+	for i, item := range GlobalConfig.Input {
+		var inputItem InputItem
+
+		switch v := item.(type) {
+		case string:
+			inputItem = InputItem{Path: v}
+		case map[string]any:
+			data, err := json.Marshal(v)
+			if err != nil {
+				return fmt.Errorf("failed to marshal input item[%d]: %v", i, err)
+			}
+			if err := json.Unmarshal(data, &inputItem); err != nil {
+				return fmt.Errorf("failed to unmarshal input item[%d]: %v", i, err)
+			}
+			// more efficient, but coupled
+			// if path, ok := v["path"].(string); ok {
+			// 	inputItem.Path = path
+			// }
+			// if start, ok := v["start"].(string); ok {
+			// 	inputItem.Start = start
+			// }
+			// if end, ok := v["end"].(string); ok {
+			// 	inputItem.End = end
+			// }
+		default:
+			return fmt.Errorf("invalid input type for item[%d]: %T", i, item)
+		}
+
+		if inputItem.Path == "" {
+			return fmt.Errorf("video_path[%d] is empty", i)
+		}
+
+		stat, err := os.Stat(inputItem.Path)
+		if err != nil {
+			return fmt.Errorf("video_path[%d] stat failed: %v", i, err)
+		}
+
+		if stat.IsDir() {
+			inputItem.ItemType = "dir"
+			videos, err := getAllVideos(inputItem.Path)
+			if err != nil {
+				return fmt.Errorf("video_path[%d] get videos error: %v", i, err)
+			}
+			GlobalConfig.VideoList = append(GlobalConfig.VideoList, videos...)
+		} else {
+			inputItem.ItemType = "file"
+			if !utils.IsSupportedVideo(inputItem.Path) {
+				return fmt.Errorf("video_path[%d] is not supported", i)
+			}
+			GlobalConfig.VideoList = append(GlobalConfig.VideoList, inputItem)
+		}
+
+		GlobalConfig.InputItems = append(GlobalConfig.InputItems, inputItem)
+	}
+
 	return nil
 }
 

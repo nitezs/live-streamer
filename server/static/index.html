@@ -377,6 +377,7 @@
 
         ws.onopen = function () {
           console.log("Connected to WebSocket");
+          setStoredToken(document.getElementById("token-input").value);
           document.getElementById("token-screen").style.display = "none";
           document.querySelector(".container-fluid").style.display = "flex";
           document.getElementById("status").textContent =
@@ -387,7 +388,7 @@
         ws.onmessage = function (evt) {
           let obj = JSON.parse(evt.data);
           messagesArea.value = obj.output;
-          messagesArea.scrollTop = messagesArea.scrollHeight;
+          // messagesArea.scrollTop = messagesArea.scrollHeight;
           document.querySelector("#current-video>span").innerHTML =
             obj.currentVideoPath;
           const listContainer = document.querySelector(
@@ -400,6 +401,7 @@
         };
 
         ws.onerror = function () {
+          localStorage.removeItem("streaming_token");
           document.getElementById("token-error").style.display = "block";
         };
 
@@ -412,8 +414,22 @@
         };
       }
 
+      function getStoredToken() {
+        return localStorage.getItem("streaming_token");
+      }
+
+      function setStoredToken(token) {
+        localStorage.setItem("streaming_token", token);
+      }
+
       function validateToken() {
-        connectWebSocket();
+        const tokenInput = document.getElementById("token-input");
+        const token = tokenInput.value || getStoredToken();
+
+        if (token) {
+          tokenInput.value = token;
+          connectWebSocket();
+        }
       }
 
       const messagesArea = document.getElementById("messages");
