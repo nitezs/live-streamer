@@ -7,6 +7,7 @@ import (
 	"live-streamer/server"
 	"live-streamer/streamer"
 	"live-streamer/utils"
+	"live-streamer/websocket"
 	"log"
 	"os"
 
@@ -16,7 +17,7 @@ import (
 var GlobalStreamer *streamer.Streamer
 
 func main() {
-	server.NewServer(":8080", websocketRequestHandler)
+	server.NewServer(":8080", websocket.RequestHandler)
 	server.GlobalServer.Run()
 	if !utils.HasFFMPEG() {
 		log.Fatal("ffmpeg not found")
